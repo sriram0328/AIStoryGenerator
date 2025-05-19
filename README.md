@@ -16,7 +16,7 @@ Follow these steps to set up the project locally:
 1. **🔀 Clone the Repository:**
 
    ```bash
-   git clone https://github.com/HaarthiV13/Story_Generator.git
+   git clone https://github.com/sriram0328/AIStoryGenerator.git
    ```
 
 2. **🐍 Create a Virtual Environment (Optional but Recommended):**
@@ -101,4 +101,4 @@ Contributions are welcome! Please follow these steps to contribute:
 
 ## 📧 Contact
 
-For any inquiries or feedback, please reach out to [Haarthi Vallabhaneni](haarthivallabhaneni13@gmail.com).
+For any inquiries or feedback, please reach out to [Sriram Ramanadham](sriramramanadham355@gmail.com).
