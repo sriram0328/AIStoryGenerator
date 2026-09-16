@@ -1,9 +1,9 @@
 import os
-import time
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.genai import errors
 
 
 # ============================================================
@@ -16,64 +16,48 @@ api_key = os.getenv("GEMINI_API_KEY")
 
 if not api_key:
     raise RuntimeError(
-        "GEMINI_API_KEY is not configured in the environment."
+        "GEMINI_API_KEY is not configured in Render Environment."
     )
 
 api_key = api_key.strip()
 
 client = genai.Client(api_key=api_key)
 
-# Current model available to your Gemini API account.
 MODEL = "gemini-3.6-flash"
 
 
 # ============================================================
-# GEMINI REQUEST WITH RETRY
+# GEMINI REQUEST
 # ============================================================
 
-def generate_with_retry(contents, max_retries=3):
+def generate_content(contents):
     """
     Send a request to Gemini.
 
-    Automatically retries temporary 503/unavailable errors.
+    We intentionally do not perform long manual retries here.
+    Render's Gunicorn worker has a request timeout, so sleeping
+    during a 503 can kill the worker.
     """
 
-    for attempt in range(max_retries):
+    try:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=contents,
+        )
 
-        try:
+        return response
 
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=contents,
-            )
+    except errors.ServerError as e:
 
-            return response
+        # Gemini temporarily unavailable / overloaded.
+        if getattr(e, "status_code", None) == 503:
 
-        except Exception as e:
+            raise RuntimeError(
+                "Gemini is temporarily experiencing high demand. "
+                "Please try again in a few seconds."
+            ) from e
 
-            error_message = str(e)
-
-            # Retry temporary overload/unavailable errors.
-            if (
-                "503" in error_message
-                or "UNAVAILABLE" in error_message
-            ):
-
-                if attempt < max_retries - 1:
-
-                    wait_time = 3 * (attempt + 1)
-
-                    print(
-                        f"Gemini temporarily unavailable. "
-                        f"Retrying in {wait_time} seconds..."
-                    )
-
-                    time.sleep(wait_time)
-
-                    continue
-
-            # For all other errors, raise immediately.
-            raise
+        raise
 
 
 # ============================================================
@@ -99,18 +83,12 @@ Focus on details that can inspire a fun,
 child-friendly story for children ages 5-8.
 """
 
-    # --------------------------------------------------------
     # Read image directly.
-    # Do NOT use Gemini Files API.
-    # --------------------------------------------------------
-
+    # We do NOT use client.files.upload().
     with open(image_path, "rb") as f:
         image_bytes = f.read()
 
-    # --------------------------------------------------------
     # Determine MIME type.
-    # --------------------------------------------------------
-
     extension = os.path.splitext(image_path)[1].lower()
 
     mime_types = {
@@ -127,20 +105,14 @@ child-friendly story for children ages 5-8.
             f"Unsupported image format: {extension}"
         )
 
-    # --------------------------------------------------------
-    # Create image part directly from bytes.
-    # --------------------------------------------------------
-
+    # Create image part.
     image_part = types.Part.from_bytes(
         data=image_bytes,
         mime_type=mime_type,
     )
 
-    # --------------------------------------------------------
-    # Send image + prompt to Gemini.
-    # --------------------------------------------------------
-
-    response = generate_with_retry(
+    # Send image to Gemini.
+    response = generate_content(
         contents=[
             image_part,
             prompt
@@ -187,11 +159,7 @@ Selected genre:
 {genre}
 """
 
-    # --------------------------------------------------------
-    # Generate story.
-    # --------------------------------------------------------
-
-    response = generate_with_retry(
+    response = generate_content(
         contents=prompt
     )
 
