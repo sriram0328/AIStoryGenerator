@@ -5,14 +5,10 @@ from google.genai import types
 
 load_dotenv()
 
-# Use ONLY GEMINI_API_KEY.
-# This avoids accidentally picking up a stale GOOGLE_API_KEY.
 api_key = os.getenv("GEMINI_API_KEY")
 
 if not api_key:
-    raise RuntimeError(
-        "GEMINI_API_KEY is missing. Add your Gemini API key to the environment."
-    )
+    raise RuntimeError("GEMINI_API_KEY is not configured")
 
 api_key = api_key.strip()
 
@@ -30,17 +26,15 @@ Describe:
 2. Colors and mood
 3. Potential story themes
 4. Interesting or unusual details
-5. Any relevant cultural or historical context if visible
+5. Any relevant cultural/historical context if visible
 
 Be descriptive but concise. Focus on details that can inspire a
 fun, child-friendly story for ages 5-8.
 """
 
-    # Read the image directly instead of using Gemini Files API.
     with open(image_path, "rb") as f:
         image_bytes = f.read()
 
-    # Detect MIME type from the file extension.
     ext = os.path.splitext(image_path)[1].lower()
 
     mime_types = {
@@ -59,10 +53,7 @@ fun, child-friendly story for ages 5-8.
 
     response = client.models.generate_content(
         model=MODEL,
-        contents=[
-            image_part,
-            prompt
-        ],
+        contents=[image_part, prompt],
     )
 
     if not response.text:
