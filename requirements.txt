@@ -3,6 +3,6 @@ requests==2.32.3
 Pillow>=10.0.0
 gunicorn==23.0.0
 gTTS==2.5.4
-google-generativeai
+google-genai
 python-dotenv
 setuptools>=70
