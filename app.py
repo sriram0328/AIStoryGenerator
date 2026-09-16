@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, url_for, jsonify, session
+from flask import Flask, render_template, request, url_for, jsonify
 from werkzeug.utils import secure_filename
 from gtts import gTTS
 from PIL import Image
@@ -9,12 +9,11 @@ from gemini_helper import analyze_image, generate_story  # Assuming these are yo
 
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret-key")
 
 # Configure upload and audio folders
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['AUDIO_FOLDER'] = 'static/audio'
-app.config['ALLOWED_EXTENSIONS'] = {'jpg', 'jpeg', 'png'}
+app.config['ALLOWED_EXTENSIONS'] = {'jpg', 'jpeg', 'png', 'webp'}
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB upload limit
 
 # Ensure required directories exist
@@ -29,7 +28,7 @@ def allowed_file(filename):
 def index():
     return render_template(
         "index.html",
-        image_path=session.get("uploaded_image"),
+        image_path=None,
         story=None,
         genre=None,
         audio_path=None,
@@ -39,27 +38,43 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    """Upload only. Story generation does NOT happen here."""
+    """STEP 1: Save the photo only. No Gemini call happens here."""
     file = request.files.get("file")
 
-    if not file or file.filename == "":
-        return jsonify({"success": False, "error": "Please choose an image to upload."}), 400
+    if file is None or not file.filename:
+        return jsonify({
+            "success": False,
+            "error": "No photo was received. Please choose an image."
+        }), 400
 
     if not allowed_file(file.filename):
         return jsonify({
             "success": False,
-            "error": "That file type isn't supported. Please upload a JPG or PNG image."
+            "error": "Please upload JPG, JPEG, PNG, or WEBP."
         }), 400
 
-    # Give every upload a unique filename so one user's file doesn't overwrite another's.
     extension = file.filename.rsplit(".", 1)[1].lower()
     filename = f"{uuid.uuid4().hex}.{extension}"
     image_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-    file.save(image_path)
 
-    session["uploaded_image"] = filename
+    try:
+        file.save(image_path)
 
-    print(f"Image uploaded: {image_path}")
+        # Validate that it is actually an image.
+        with Image.open(image_path) as image:
+            image.verify()
+
+    except Exception as e:
+        if os.path.exists(image_path):
+            os.remove(image_path)
+
+        print(f"Upload validation failed: {e}")
+        return jsonify({
+            "success": False,
+            "error": "The selected file is not a valid image."
+        }), 400
+
+    print(f"PHOTO UPLOADED: {image_path}")
 
     return jsonify({
         "success": True,
@@ -70,9 +85,9 @@ def upload():
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    """Generate the story only after the user clicks Create My Story."""
-    genre = request.form.get("genre")
-    filename = session.get("uploaded_image")
+    """STEP 2: Generate story only after the user clicks the Generate button."""
+    filename = request.form.get("filename", "").strip()
+    genre = request.form.get("genre", "").strip()
 
     if not filename:
         return jsonify({
@@ -86,54 +101,104 @@ def generate():
             "error": "Please select a story type."
         }), 400
 
+    # Only allow our generated filenames, preventing path traversal.
+    if not re.fullmatch(r"[a-f0-9]{32}\.(jpg|jpeg|png|webp)", filename):
+        return jsonify({
+            "success": False,
+            "error": "Invalid uploaded photo. Please upload it again."
+        }), 400
+
     image_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
 
     if not os.path.isfile(image_path):
-        session.pop("uploaded_image", None)
         return jsonify({
             "success": False,
-            "error": "The uploaded photo could not be found. Please upload it again."
+            "error": "Uploaded photo was not found. Please upload it again."
         }), 404
 
     tmp_path = None
 
     try:
-        # Convert/open the uploaded image for Gemini.
+        # Convert the uploaded image to PNG for Gemini.
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
             tmp_path = tmp.name
-            image = Image.open(image_path)
-            image.load()
-            image.save(tmp_path, format="PNG")
 
-        # AI work starts ONLY here, after Generate is clicked.
+            with Image.open(image_path) as image:
+                # Handle transparency and different image modes safely.
+                if image.mode in ("RGBA", "LA"):
+                    background = Image.new("RGB", image.size, "white")
+                    background.paste(image, mask=image.getchannel("A"))
+                    image = background
+                else:
+                    image = image.convert("RGB")
+
+                image.save(tmp_path, format="PNG")
+
+        print(f"GENERATING STORY: genre={genre}, image={filename}")
+
+        # Gemini + story generation happens ONLY after Generate is clicked.
         analysis = analyze_image(tmp_path)
         story = generate_story(analysis, genre)
 
-        # Generate audio after the story is created.
-        audio_filename = f"{os.path.splitext(filename)[0]}_{secure_filename(genre)}.mp3"
-        audio_path = os.path.join(app.config["AUDIO_FOLDER"], audio_filename)
+        if not story:
+            raise RuntimeError("Gemini returned an empty story.")
 
-        tts = gTTS(text=story, lang="en")
-        tts.save(audio_path)
+        # TTS is optional. If gTTS fails, the story should STILL be shown.
+        audio_url = None
+
+        try:
+            audio_filename = (
+                f"{os.path.splitext(filename)[0]}_{secure_filename(genre)}.mp3"
+            )
+            audio_path = os.path.join(
+                app.config["AUDIO_FOLDER"], audio_filename
+            )
+
+            tts = gTTS(text=story, lang="en")
+            tts.save(audio_path)
+
+            audio_url = url_for(
+                "static",
+                filename=f"audio/{audio_filename}"
+            )
+
+        except Exception as audio_error:
+            print(f"TTS failed (story will still be returned): {audio_error}")
+
+        print("STORY GENERATED SUCCESSFULLY")
 
         return jsonify({
             "success": True,
             "story": story,
             "genre": genre,
-            "audio_url": url_for("static", filename=f"audio/{audio_filename}"),
-            "image_url": url_for("static", filename=f"uploads/{filename}")
+            "audio_url": audio_url,
+            "image_url": url_for(
+                "static",
+                filename=f"uploads/{filename}"
+            )
         })
 
     except Exception as e:
-        print(f"Story generation failed: {e}")
+        # IMPORTANT: return the real server error while debugging instead
+        # of hiding it behind a generic 500.
+        print(f"STORY GENERATION FAILED: {type(e).__name__}: {e}")
+
         return jsonify({
             "success": False,
-            "error": "Something went wrong while creating your story. Please try again."
+            "error": f"{type(e).__name__}: {str(e)}"
         }), 500
 
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+@app.errorhandler(413)
+def request_too_large(error):
+    return jsonify({
+        "success": False,
+        "error": "Photo is too large. Maximum upload size is 8 MB."
+    }), 413
 
 
 if __name__ == "__main__":
