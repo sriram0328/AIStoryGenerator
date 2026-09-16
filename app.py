@@ -5,6 +5,7 @@ from PIL import Image
 import os
 import tempfile
 import uuid
+import re
 from gemini_helper import analyze_image, generate_story  # Assuming these are your helper functions
 
 # Initialize Flask app
@@ -199,6 +200,20 @@ def request_too_large(error):
         "success": False,
         "error": "Photo is too large. Maximum upload size is 8 MB."
     }), 413
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    print(f"UNHANDLED SERVER ERROR: {type(error).__name__}: {error}")
+
+    # Keep normal browser errors as Flask HTML, but make our API endpoints JSON.
+    if request.path in ("/upload", "/generate"):
+        return jsonify({
+            "success": False,
+            "error": f"{type(error).__name__}: {str(error)}"
+        }), 500
+
+    raise error
 
 
 if __name__ == "__main__":
