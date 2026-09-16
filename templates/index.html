@@ -207,17 +207,22 @@
     <h1>✨ Magical Story Generator ✨</h1>
     <p class="intro-text">Upload an image and let us create an enchanting story just for you! 🪄📖</p>
 
-    <form method="POST" enctype="multipart/form-data" onsubmit="showLoader()">
+    <form id="story-form">
         <div class="upload-section">
             <label for="file-upload">
                 <span>📸</span>
                 Click or Drag to Upload Your Image
             </label>
-            <input id="file-upload" type="file" name="file" accept="image/*" required onchange="showUploadMessage()">
+            <input id="file-upload" type="file" name="file" accept="image/*" required>
         </div>
 
-        <!-- Display message after file is uploaded -->
-        <div id="upload-message" class="upload-message" style="display:none;">Photo uploaded</div>
+        <div id="upload-message" class="upload-message" style="display:none;">
+            Photo uploaded
+        </div>
+
+        <div id="upload-preview" style="display:none; text-align:center;">
+            <img id="preview-image" class="uploaded-image" alt="Uploaded Picture">
+        </div>
 
         <div class="genre-section">
             <label for="genre"><strong>Pick Your Story Type:</strong></label>
@@ -230,37 +235,35 @@
             </select>
         </div>
 
-        <button type="submit">✨ Create My Story! ✨</button>
+        <button id="generate-button" type="submit" disabled>
+            ✨ Create My Story! ✨
+        </button>
     </form>
 
-    {% if image_path %}
-    <div class="upload-section">
-        <h3>Your Uploaded Picture 🖼️</h3>
-        <img class="uploaded-image" src="{{ url_for('static', filename='uploads/' + image_path) }}" alt="Uploaded Picture">
-    </div>
+    <div id="error-message" class="upload-message"
+         style="display:none; color:#dc2626;"></div>
 
-    <div class="story-section">
-        <h3>Your {{ genre }} Story 📖</h3>
-        <div class="story">
-            <p>{{ story }}</p>
+    <div id="story-result" style="display:none;">
+        <div class="story-section">
+            <h3 id="story-title">Your Story 📖</h3>
+            <div class="story">
+                <p id="story-text"></p>
+            </div>
+        </div>
+
+        <div class="audio-section" style="margin-top:20px;">
+            <h3>Listen to Your Story 🎧</h3>
+            <audio id="story-audio" controls>
+                <source id="audio-source" type="audio/mpeg">
+                Your browser does not support the audio element.
+            </audio>
+            <p>
+                <a id="audio-download" href="#" download>
+                    📥 Download Audio
+                </a>
+            </p>
         </div>
     </div>
-    {% endif %}
-
-    {% if audio_path %}
-    <div class="audio-section">
-        <h3>Listen to Your Story 🎧</h3>
-        <audio controls>
-            <source src="{{ url_for('static', filename='audio/' + audio_path) }}" type="audio/mpeg">
-            Your browser does not support the audio element.
-        </audio>
-        <p>
-            <a href="{{ url_for('static', filename='audio/' + audio_path) }}" download>
-                📥 Download Audio
-            </a>
-        </p>
-    </div>
-    {% endif %}
 </div>
 
 <!-- Loader -->
@@ -269,15 +272,110 @@
 </div>
 
 <script>
-    // Show loader when the form is submitted
-    function showLoader() {
-        document.getElementById('loader-wrapper').style.display = 'flex';
-    }
+    const fileInput = document.getElementById("file-upload");
+    const uploadMessage = document.getElementById("upload-message");
+    const uploadPreview = document.getElementById("upload-preview");
+    const previewImage = document.getElementById("preview-image");
+    const generateButton = document.getElementById("generate-button");
+    const storyForm = document.getElementById("story-form");
+    const loader = document.getElementById("loader-wrapper");
+    const errorMessage = document.getElementById("error-message");
+    const storyResult = document.getElementById("story-result");
+    const storyTitle = document.getElementById("story-title");
+    const storyText = document.getElementById("story-text");
+    const storyAudio = document.getElementById("story-audio");
+    const audioSource = document.getElementById("audio-source");
+    const audioDownload = document.getElementById("audio-download");
 
-    // Show the upload message when a file is selected
-    function showUploadMessage() {
-        document.getElementById('upload-message').style.display = 'block';
-    }
+    // STEP 1: Selecting a photo uploads it immediately.
+    // It does NOT call Gemini and does NOT generate a story.
+    fileInput.addEventListener("change", async function () {
+        const file = this.files[0];
+
+        if (!file) return;
+
+        uploadMessage.style.display = "none";
+        errorMessage.style.display = "none";
+        generateButton.disabled = true;
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const response = await fetch("/upload", {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || "Upload failed.");
+            }
+
+            // Show the uploaded photo and confirmation without refreshing.
+            previewImage.src = data.image_url;
+            uploadPreview.style.display = "block";
+            uploadMessage.textContent = "Photo uploaded ✓";
+            uploadMessage.style.display = "block";
+
+            // Now the user can select genre and click Generate.
+            generateButton.disabled = false;
+
+        } catch (error) {
+            errorMessage.textContent = error.message;
+            errorMessage.style.display = "block";
+            uploadPreview.style.display = "none";
+            generateButton.disabled = true;
+        }
+    });
+
+    // STEP 2: Generate the story only when the Generate button is clicked.
+    storyForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        const genre = document.getElementById("genre").value;
+
+        errorMessage.style.display = "none";
+        storyResult.style.display = "none";
+        loader.style.display = "flex";
+        generateButton.disabled = true;
+        generateButton.textContent = "✨ Creating your story... ✨";
+
+        const formData = new FormData();
+        formData.append("genre", genre);
+
+        try {
+            const response = await fetch("/generate", {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || "Story generation failed.");
+            }
+
+            storyTitle.textContent = `Your ${data.genre} Story 📖`;
+            storyText.textContent = data.story;
+
+            audioSource.src = data.audio_url;
+            storyAudio.load();
+            audioDownload.href = data.audio_url;
+
+            storyResult.style.display = "block";
+            storyResult.scrollIntoView({ behavior: "smooth", block: "start" });
+
+        } catch (error) {
+            errorMessage.textContent = error.message;
+            errorMessage.style.display = "block";
+        } finally {
+            loader.style.display = "none";
+            generateButton.disabled = false;
+            generateButton.textContent = "✨ Create My Story! ✨";
+        }
+    });
 </script>
 
 </body>
