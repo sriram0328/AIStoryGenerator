@@ -13,6 +13,7 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['AUDIO_FOLDER'] = 'static/audio'
 app.config['ALLOWED_EXTENSIONS'] = {'jpg', 'jpeg', 'png'}
+app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB upload limit
 
 # Ensure required directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -29,40 +30,60 @@ def index():
         file = request.files.get('file')
         genre = request.form.get('genre')
 
-        if file and allowed_file(file.filename):
-            # Save the uploaded file
-            filename = secure_filename(file.filename)
-            image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(image_path)
+        if not file or file.filename == '':
+            return render_template('index.html', image_path=None, story=None, audio_path=None,
+                                    error="Please choose an image to upload.")
 
-            # Debug: print the image path
-            print(f"Image saved at: {image_path}")
+        if not allowed_file(file.filename):
+            return render_template('index.html', image_path=None, story=None, audio_path=None,
+                                    error="That file type isn't supported. Please upload a JPG or PNG image.")
 
+        # Save the uploaded file
+        filename = secure_filename(file.filename)
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(image_path)
+
+        # Debug: print the image path
+        print(f"Image saved at: {image_path}")
+
+        tmp_path = None
+        try:
             # Open image and pass it to analysis function
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp_path = tmp.name
                 image = Image.open(image_path)
-                image.save(tmp.name)
+                image.save(tmp_path)
 
-                # Analyze the image and generate the story
-                analysis = analyze_image(tmp.name)
-                story = generate_story(analysis, genre)
+            # Analyze the image and generate the story
+            analysis = analyze_image(tmp_path)
+            story = generate_story(analysis, genre)
 
-                # Generate audio for the story
-                audio_filename = f"{os.path.splitext(filename)[0]}_{genre}.mp3"
-                audio_path = os.path.join(app.config['AUDIO_FOLDER'], audio_filename)
-                tts = gTTS(text=story, lang='en')
-                tts.save(audio_path)
+            # Generate audio for the story
+            audio_filename = f"{os.path.splitext(filename)[0]}_{genre}.mp3"
+            audio_path = os.path.join(app.config['AUDIO_FOLDER'], audio_filename)
+            tts = gTTS(text=story, lang='en')
+            tts.save(audio_path)
 
-                # Render the result page with the generated story and audio
-                return render_template(
-                    'index.html',
-                    image_path=filename,
-                    story=story,
-                    genre=genre,
-                    audio_path=audio_filename
-                )
+            # Render the result page with the generated story and audio
+            return render_template(
+                'index.html',
+                image_path=filename,
+                story=story,
+                genre=genre,
+                audio_path=audio_filename
+            )
 
-    return render_template('index.html', image_path=None, story=None, audio_path=None)
+        except Exception as e:
+            print(f"Story generation failed: {e}")
+            return render_template('index.html', image_path=None, story=None, audio_path=None,
+                                    error="Something went wrong while creating your story. Please try again.")
+
+        finally:
+            # Clean up the temp file regardless of success or failure
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    return render_template('index.html', image_path=None, story=None, audio_path=None, error=None)
 
 if __name__ == "__main__":
     app.run(debug=True)
