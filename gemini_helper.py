@@ -21,11 +21,10 @@ if not api_key:
 
 api_key = api_key.strip()
 
-# Explicitly use GEMINI_API_KEY.
 client = genai.Client(api_key=api_key)
 
-# More established/available Flash model.
-MODEL = "gemini-2.5-flash"
+# Current model available to your Gemini API account.
+MODEL = "gemini-3.6-flash"
 
 
 # ============================================================
@@ -40,7 +39,9 @@ def generate_with_retry(contents, max_retries=3):
     """
 
     for attempt in range(max_retries):
+
         try:
+
             response = client.models.generate_content(
                 model=MODEL,
                 contents=contents,
@@ -52,10 +53,14 @@ def generate_with_retry(contents, max_retries=3):
 
             error_message = str(e)
 
-            # Retry temporary Gemini overload errors.
-            if "503" in error_message or "UNAVAILABLE" in error_message:
+            # Retry temporary overload/unavailable errors.
+            if (
+                "503" in error_message
+                or "UNAVAILABLE" in error_message
+            ):
 
                 if attempt < max_retries - 1:
+
                     wait_time = 3 * (attempt + 1)
 
                     print(
@@ -64,9 +69,10 @@ def generate_with_retry(contents, max_retries=3):
                     )
 
                     time.sleep(wait_time)
+
                     continue
 
-            # Any other error, or exhausted retries.
+            # For all other errors, raise immediately.
             raise
 
 
@@ -95,14 +101,14 @@ child-friendly story for children ages 5-8.
 
     # --------------------------------------------------------
     # Read image directly.
-    # We intentionally DO NOT use client.files.upload().
+    # Do NOT use Gemini Files API.
     # --------------------------------------------------------
 
     with open(image_path, "rb") as f:
         image_bytes = f.read()
 
     # --------------------------------------------------------
-    # Determine image MIME type.
+    # Determine MIME type.
     # --------------------------------------------------------
 
     extension = os.path.splitext(image_path)[1].lower()
@@ -122,7 +128,7 @@ child-friendly story for children ages 5-8.
         )
 
     # --------------------------------------------------------
-    # Create image part from bytes.
+    # Create image part directly from bytes.
     # --------------------------------------------------------
 
     image_part = types.Part.from_bytes(
