@@ -213,16 +213,22 @@
                 <span>📸</span>
                 Click or Drag to Upload Your Image
             </label>
-            <input id="file-upload" type="file" name="file" accept="image/*" required>
+            <input id="file-upload" type="file"
+                   name="file"
+                   accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                   required>
         </div>
 
         <div id="upload-message" class="upload-message" style="display:none;">
-            Photo uploaded
+            Photo uploaded ✓
         </div>
 
         <div id="upload-preview" style="display:none; text-align:center;">
             <img id="preview-image" class="uploaded-image" alt="Uploaded Picture">
         </div>
+
+        <!-- This filename is set only after /upload succeeds. -->
+        <input type="hidden" id="uploaded-filename" name="filename">
 
         <div class="genre-section">
             <label for="genre"><strong>Pick Your Story Type:</strong></label>
@@ -251,7 +257,7 @@
             </div>
         </div>
 
-        <div class="audio-section" style="margin-top:20px;">
+        <div id="audio-section" class="audio-section" style="margin-top:20px; display:none;">
             <h3>Listen to Your Story 🎧</h3>
             <audio id="story-audio" controls>
                 <source id="audio-source" type="audio/mpeg">
@@ -264,7 +270,6 @@
             </p>
         </div>
     </div>
-</div>
 
 <!-- Loader -->
 <div class="loader-wrapper" id="loader-wrapper">
@@ -276,6 +281,7 @@
     const uploadMessage = document.getElementById("upload-message");
     const uploadPreview = document.getElementById("upload-preview");
     const previewImage = document.getElementById("preview-image");
+    const uploadedFilename = document.getElementById("uploaded-filename");
     const generateButton = document.getElementById("generate-button");
     const storyForm = document.getElementById("story-form");
     const loader = document.getElementById("loader-wrapper");
@@ -283,12 +289,31 @@
     const storyResult = document.getElementById("story-result");
     const storyTitle = document.getElementById("story-title");
     const storyText = document.getElementById("story-text");
+    const audioSection = document.getElementById("audio-section");
     const storyAudio = document.getElementById("story-audio");
     const audioSource = document.getElementById("audio-source");
     const audioDownload = document.getElementById("audio-download");
 
-    // STEP 1: Selecting a photo uploads it immediately.
-    // It does NOT call Gemini and does NOT generate a story.
+    async function readResponse(response) {
+        const contentType = response.headers.get("content-type") || "";
+
+        if (contentType.includes("application/json")) {
+            return await response.json();
+        }
+
+        // This prevents the ugly "Unexpected token <" JSON error.
+        const text = await response.text();
+        throw new Error(
+            `Server returned ${response.status} instead of JSON. ` +
+            `Response: ${text.substring(0, 200)}`
+        );
+    }
+
+    // ============================================================
+    // STEP 1 — PHOTO UPLOAD
+    // Selecting a photo calls ONLY /upload.
+    // Gemini is NOT called here.
+    // ============================================================
     fileInput.addEventListener("change", async function () {
         const file = this.files[0];
 
@@ -296,7 +321,9 @@
 
         uploadMessage.style.display = "none";
         errorMessage.style.display = "none";
+        storyResult.style.display = "none";
         generateButton.disabled = true;
+        uploadedFilename.value = "";
 
         const formData = new FormData();
         formData.append("file", file);
@@ -307,22 +334,25 @@
                 body: formData
             });
 
-            const data = await response.json();
+            const data = await readResponse(response);
 
             if (!response.ok || !data.success) {
-                throw new Error(data.error || "Upload failed.");
+                throw new Error(data.error || "Photo upload failed.");
             }
 
-            // Show the uploaded photo and confirmation without refreshing.
+            uploadedFilename.value = data.filename;
+
             previewImage.src = data.image_url;
             uploadPreview.style.display = "block";
+
             uploadMessage.textContent = "Photo uploaded ✓";
             uploadMessage.style.display = "block";
 
-            // Now the user can select genre and click Generate.
+            // Now the Generate button becomes available.
             generateButton.disabled = false;
 
         } catch (error) {
+            console.error("UPLOAD ERROR:", error);
             errorMessage.textContent = error.message;
             errorMessage.style.display = "block";
             uploadPreview.style.display = "none";
@@ -330,11 +360,23 @@
         }
     });
 
-    // STEP 2: Generate the story only when the Generate button is clicked.
+
+    // ============================================================
+    // STEP 2 — STORY GENERATION
+    // Only this action calls Gemini.
+    // The page NEVER submits normally, so there is no refresh.
+    // ============================================================
     storyForm.addEventListener("submit", async function (event) {
         event.preventDefault();
 
+        const filename = uploadedFilename.value;
         const genre = document.getElementById("genre").value;
+
+        if (!filename) {
+            errorMessage.textContent = "Please upload a photo first.";
+            errorMessage.style.display = "block";
+            return;
+        }
 
         errorMessage.style.display = "none";
         storyResult.style.display = "none";
@@ -343,6 +385,7 @@
         generateButton.textContent = "✨ Creating your story... ✨";
 
         const formData = new FormData();
+        formData.append("filename", filename);
         formData.append("genre", genre);
 
         try {
@@ -351,7 +394,7 @@
                 body: formData
             });
 
-            const data = await response.json();
+            const data = await readResponse(response);
 
             if (!response.ok || !data.success) {
                 throw new Error(data.error || "Story generation failed.");
@@ -360,19 +403,30 @@
             storyTitle.textContent = `Your ${data.genre} Story 📖`;
             storyText.textContent = data.story;
 
-            audioSource.src = data.audio_url;
-            storyAudio.load();
-            audioDownload.href = data.audio_url;
+            // Audio is optional. A TTS/network failure won't hide the story.
+            if (data.audio_url) {
+                audioSource.src = data.audio_url;
+                audioDownload.href = data.audio_url;
+                storyAudio.load();
+                audioSection.style.display = "block";
+            } else {
+                audioSection.style.display = "none";
+            }
 
             storyResult.style.display = "block";
-            storyResult.scrollIntoView({ behavior: "smooth", block: "start" });
+            storyResult.scrollIntoView({
+                behavior: "smooth",
+                block: "start"
+            });
 
         } catch (error) {
+            console.error("GENERATION ERROR:", error);
             errorMessage.textContent = error.message;
             errorMessage.style.display = "block";
+
         } finally {
             loader.style.display = "none";
-            generateButton.disabled = false;
+            generateButton.disabled = !uploadedFilename.value;
             generateButton.textContent = "✨ Create My Story! ✨";
         }
     });
